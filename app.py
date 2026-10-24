@@ -281,6 +281,7 @@ TP_OVERRIDES: Dict[int, float] = {}
 # Todo se cambia en caliente desde la web.
 REVENGE_ENABLED     = os.getenv("REVENGE_ENABLED", "false").lower() == "true"
 REVENGE_MULT        = float(os.getenv("REVENGE_MULT", "1"))
+REVENGE_MULT_MAX    = float(os.getenv("REVENGE_MULT_MAX", "10"))   # tope de seguridad del multiplicador (editable desde la web hasta este valor)
 REVENGE_RECOVER_PCT = float(os.getenv("REVENGE_RECOVER_PCT", "50"))
 REVENGE_SL_USD      = float(os.getenv("REVENGE_SL_USD", "-4"))
 
@@ -336,7 +337,7 @@ def _apply_settings(data: dict) -> None:
                 REVENGE_ENABLED = val
             elif key == "revenge_mult":
                 val = float(val)
-                if val <= 0:
+                if val <= 0 or val > REVENGE_MULT_MAX:
                     continue
                 REVENGE_MULT = val
             elif key == "revenge_recover_pct":
@@ -1826,7 +1827,7 @@ class TradingBot:
 
     @staticmethod
     def revenge_config() -> dict:
-        return {"enabled": REVENGE_ENABLED, "mult": REVENGE_MULT,
+        return {"enabled": REVENGE_ENABLED, "mult": REVENGE_MULT, "mult_max": REVENGE_MULT_MAX,
                 "recover_pct": REVENGE_RECOVER_PCT, "sl_usd": REVENGE_SL_USD}
 
     def set_take_profit(self, symbol: str, tp_usd: Optional[float]) -> bool:
@@ -2769,7 +2770,8 @@ HTML = r"""<!doctype html>
           <label class="switch" title="Activar / desactivar venganza"><input id="rvEnabled" type="checkbox"><span></span></label>
         </div>
         <div class="kv"><span>Notional del LONG</span>
-          <span class="seg"><button data-mult="1" onclick="setRevenge({mult:1})">×1</button><button data-mult="2" onclick="setRevenge({mult:2})">×2</button></span></div>
+          <span class="seg"><button data-mult="1" onclick="setRevenge({mult:1})">×1</button><button data-mult="2" onclick="setRevenge({mult:2})">×2</button><button data-mult="3" onclick="setRevenge({mult:3})">×3</button><button data-mult="4" onclick="setRevenge({mult:4})">×4</button></span>
+          <button id="rvMultBtn" class="numbtn violet" title="Escribir otro multiplicador" onclick="editRevengeMult()">—</button></div>
         <div class="kv"><span>Recuperar de la pérdida</span>
           <button id="rvPctBtn" class="numbtn violet" onclick="editRevengePct()">—</button></div>
         <div class="kv"><span>Stop loss de la venganza (USD)</span>
@@ -3391,6 +3393,7 @@ function renderRevenge(rv, defSl) {
   q('rvState').style.opacity = on ? '1' : '.55';
   document.querySelectorAll('#sec-rev .seg button').forEach(b => b.classList.toggle('on', n(b.dataset.mult) === mult));
   document.querySelectorAll('#rvChips .chipbtn').forEach(b => b.classList.toggle('on', n(b.dataset.pct) === rec));
+  setTxt('rvMultBtn', `×${fx(mult, mult % 1 ? 2 : 0)}`);
   setTxt('rvPctBtn', `${fx(rec, rec % 1 ? 1 : 0)}%`);
   setTxt('rvSlBtn', fx(rv.sl_usd, 2));
   const ex = Math.abs(n(defSl));
@@ -3422,6 +3425,17 @@ function editRevengeSl() {
     label: 'Pérdida máxima en USD (negativo, ej. -4)', value: _rv ? n(_rv.sl_usd) : -4,
     validate: v => v >= 0 ? 'El Stop Loss debe ser un número negativo (por ejemplo -4).' : null,
     url: '/api/set-revenge', body: v => ({ sl_usd: v }),
+  });
+}
+
+function editRevengeMult() {
+  const max = _rv && _rv.mult_max ? n(_rv.mult_max) : 10;
+  openNum({
+    title: 'Venganza: multiplicador del notional',
+    sub: `El LONG se abre con el notional cerrado × este valor (3 = triple, 4 = cuádruple…). Máximo ${max}.`,
+    label: `Multiplicador (positivo, hasta ${max})`, value: _rv ? n(_rv.mult) : 1, step: '0.1',
+    validate: v => (v <= 0 || v > max) ? `Debe ser mayor que 0 y como máximo ${max}.` : null,
+    url: '/api/set-revenge', body: v => ({ mult: v }),
   });
 }
 
@@ -3679,7 +3693,7 @@ def api_set_tp_config():
 
 @app.post("/api/set-revenge")
 def api_set_revenge():
-    """Venganza en caliente: {"enabled": bool, "mult": 1|2, "recover_pct": 50, "sl_usd": -4}."""
+    """Venganza en caliente: {"enabled": bool, "mult": cualquier valor > 0 hasta REVENGE_MULT_MAX, "recover_pct": 50, "sl_usd": -4}."""
     data = request.get_json(silent=True) or {}
     enabled = mult = recover = sl_usd = None
     try:
@@ -3687,8 +3701,8 @@ def api_set_revenge():
             enabled = bool(data["enabled"])
         if data.get("mult") is not None:
             mult = float(data["mult"])
-            if not 0 < mult <= 10:
-                return jsonify({"ok": False, "error": "El multiplicador debe estar entre 0 y 10"}), 400
+            if not 0 < mult <= REVENGE_MULT_MAX:
+                return jsonify({"ok": False, "error": f"El multiplicador debe estar entre 0 y {REVENGE_MULT_MAX:g}"}), 400
         if data.get("recover_pct") is not None:
             recover = float(data["recover_pct"])
             if not 0 < recover <= 1000:
